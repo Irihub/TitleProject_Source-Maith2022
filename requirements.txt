@@ -1,0 +1,12 @@
+# Requires Python >= 3.7.4
+# Install Cython and numpy before the rest (ANNarchy needs them to build):
+#   pip install Cython==0.29.37 numpy==1.21.3
+#   pip install --no-build-isolation -r requirements.txt
+ANNarchy==4.7.1.4
+matplotlib==3.4.1
+numpy==1.21.3
+pandas==1.3.5
+pingouin==0.5.1
+scikit-learn==0.22.2.post1
+scipy==1.7.1
+tqdm==4.36.1
