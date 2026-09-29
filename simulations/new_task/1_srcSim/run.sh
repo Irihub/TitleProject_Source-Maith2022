@@ -1,6 +1,6 @@
 startTime=$(date +%s)
 
-let parallel=10
+let parallel=30
 let durchgaenge=1
 
 for durchgang in $(seq $durchgaenge); do

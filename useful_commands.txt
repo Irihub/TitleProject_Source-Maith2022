@@ -1,0 +1,53 @@
+# The number of simulations is "parallel" * "durchgaenge" (vars in run.sh). If parallel=10 and durchgaenge=5, 5 batches of 10 parallel simualtions will be run for 50 total
+
+[Install conda]
+cd ~
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+
+[Reload shell]
+source ~/.bashrc
+
+[Create python venv with conda]
+conda create -n thesisEnv python=3.7.4 -y
+
+[Enable python venv]
+conda activate thesisEnv
+
+[Deactivate python venv]
+conda deactivate
+
+[Route to project]
+cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master
+(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master
+
+[Route to 014a simulation]
+cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
+(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
+
+[Run ONE simulation (for debugging)]
+python parallel.py 1
+
+[Run simulations (in the background)]
+export PYTHONUNBUFFERED=1
+nohup bash run.sh > run_log.txt 2>&1 &
+
+[Follow printed log]
+tail -f run_log.txt
+
+[Kill all simulations]
+pkill -f run.sh
+pkill -f parallel.py
+
+[Check live RAM usage]
+watch -n 5 'free -h; echo; ps -C python -o pid,rss,etime,args --sort=-rss | awk "NR==1{print;next}{printf \"%s %7.0f MB %s %s %s\n\",\$1,\$2/1024,\$3,\$5,\$6}"'
+
+[Cluster terminal commands]
+{Check number of threads}
+nproc
+
+{Memory and usage state}
+htop
+
+{Active terminals}
+who

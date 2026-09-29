@@ -4,6 +4,7 @@ from ANNarchy import (
     Synapse,
     Population,
     Projection,
+    Monitor,
     compile,
     simulate,
     simulate_until,
@@ -16,7 +17,8 @@ from timeit import default_timer as timer
 import numpy as np
 import sys
 
-setup(dt=0.1)
+dt = 0.1
+setup(dt=dt)
 setup(num_threads=1)
 
 random.seed()
@@ -35,6 +37,10 @@ dopamine_rate = 0.025e-5  # 0.9e-5
 t_dop = 0.02
 inter_trial = 1700
 dop_decay = True
+
+# GPe firing-rate recording (for choice-aligned PSTH analysis, see
+# analyses/thesis_power_analysis or a dedicated plotting script)
+gpe_fr_bin_ms = 20.0  # bin width for the GPe population firing-rate trace
 
 
 stn_gpe_synapse = "plastic"  # fixed,plastic
@@ -828,6 +834,12 @@ CSTN.delta = 0
 STNGPe.factor = stn_gpe_factor
 STNGPe.post_factor = stn_gpe_post_factor
 
+# ---------------------------------------------------------------------------------------Monitors---------------------------------------------------------------------------------------
+# Records GPe spikes continuously; drained and binned into a firing-rate
+# trace once per trial (see the SIMULATION section below) rather than kept
+# as raw spikes for the whole run, to keep memory bounded.
+GPeSpikes = Monitor(GPe, ["spike"])
+
 
 # ---------------------------------------------------------------------------------------Compile---------------------------------------------------------------------------------------
 wie_viele_parallel = 20
@@ -837,9 +849,6 @@ else:
     nummer = sim_id % wie_viele_parallel
 
 compile(directory="annarchy_sim" + str(sim_id))  # +str(sim_id)
-
-
-# ---------------------------------------------------------------------------------------Monitors---------------------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------------------extra functions---------------------------------------------------------------------------------------
@@ -998,6 +1007,11 @@ def weights(means, stds):
 # Initial simulation to let the network run to a stable state
 simulate(2000.0)
 
+# Discard spikes accumulated during the stabilization period above, and
+# start the clock used to drain/bin the GPe monitor once per trial.
+GPeSpikes.get("spike")
+last_drain_time = get_time()
+
 """
 #STNGPe Details Monitore starten#####################################################################################STNGPe Details Monitore starten
 neuron_nr=0
@@ -1021,6 +1035,22 @@ for monitor_neuron in monitor_neurons:
 # CT.w = weights( [1.06147598e-7,8.38542006e-8,1.00262385e-7,5.46554415e-5,7.64999230e-8], [1e-20,1e-20,1e-20,1e-20,1e-20] )
 
 num_blocks = 60
+# --- Block-ending rule ------------------------------------------------------
+# "legacy":   block ends after 15 CONSECUTIVE rewarded trials, max 30 trials.
+# "nhp_like": block ends once a per-block-random threshold (12-15) of
+#             rewarded trials is reached within the last 25 trials (sliding
+#             window).
+block_definition = "nhp_like"  # "legacy" or "nhp_like"
+
+# legacy-mode parameters
+legacy_streak_target = 15
+legacy_max_trials = 30
+
+# nhp_like-mode parameters
+nhp_window = 25
+nhp_threshold_min = 12
+nhp_threshold_max = 15  # inclusive
+nhp_max_trials = 50     # safety cap; must stay <= 100 (see per-block array sizing below)
 
 num_correct = np.zeros(num_stimulus)
 mw_c_sd1 = np.zeros((num_blocks * 100, num_actions, num_stimulus))
@@ -1039,6 +1069,13 @@ failed_blocks = np.zeros(num_blocks)
 output = 0
 dop = dopamine_cl()
 
+# GPe firing-rate trace (population resolved by action, one row per
+# gpe_fr_bin_ms bin) and the timestamp of each trial's choice moment, both
+# in ms on the same absolute simulation clock as get_time().
+choice_times = []
+gpe_rate_values = []  # list of (n_bins_this_trial, num_actions) arrays, vstacked at the end
+gpe_rate_times = []   # list of 1D arrays with each bin's start time, concatenated at the end
+
 # correct_list=[1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1,2,3,2,1]
 # correct_list=make_correct_list(num_blocks)
 trial = 0
@@ -1048,14 +1085,29 @@ for block in range(num_blocks):
     prev_correct = correct
     while prev_correct == correct:
         correct = np.random.randint(low=1, high=4)
-    print("new_correct = ", correct + 1, "\n")
+    print(f'(SIM {sim_id})[BLOCK {block}] new_correct = {correct + 1}\n')
 
     probabilities_reward = np.zeros(5)
     probabilities_reward[correct] = 1.0
     num_correct[0] = 0
     num_zeros = 0
-    # this will run trials until 15 correct responses are given or for a maximum of 30 trials
-    while num_correct[0] < 15 and num_trials < 30 and num_zeros < 3:
+
+    # nhp_like: threshold for this block, drawn fresh each block
+    block_threshold = np.random.randint(nhp_threshold_min, nhp_threshold_max + 1)
+    block_outcomes = []  # 1/0 rewarded-or-not history for this block, nhp_like only
+
+    # this will run trials until the block-ending rule (see block_definition) is met
+    while True:
+        # --- stopping condition ---
+        if block_definition == "legacy":
+            if num_correct[0] >= legacy_streak_target or num_trials >= legacy_max_trials or num_zeros >= 3:
+                break
+        else:  # "nhp_like"
+            recent = block_outcomes[-nhp_window:]
+            if sum(recent) >= block_threshold or num_trials >= nhp_max_trials or num_zeros >= 3:
+                break
+        # -------------------------
+        
         start = timer()
         st = get_time()
         stim_id = random.randint(0, num_stimulus - 1)
@@ -1065,13 +1117,15 @@ for block in range(num_blocks):
         Integrators.decision = 0
         Integrators.g_ampa = 0
         r = simulate_until(max_duration=presentation_time, population=Integrators)
+        choice_time = get_time()  # "time zero" for choice-aligned analyses (e.g. GPe PSTH)
+        choice_times.append(choice_time)
         Cortex[stim_id * population_size : (stim_id + 1) * population_size].rates = 0
         decision = int(Integrators.decision)
         ### catch no decision
         if not (decision > 0):
             dec_idx = np.argmax(np.array(Integrators.g_ampa))
             decision = int(np.array(Integrators.neuron_id)[dec_idx])
-        print(decision)
+        print(f'(SIM {sim_id}) decision = {decision}')
         dopamine_level = 0
         if decision > 0:
             num_zeros = 0
@@ -1080,12 +1134,15 @@ for block in range(num_blocks):
             if ran < pr:
                 dopamine_level = dop.positive_dopamine(decision - 1)
                 num_correct[stim_id] += 1
+                block_outcomes.append(1)
             else:
                 dopamine_level = dop.negative_dopamine(decision - 1)
                 num_correct[stim_id] = 0
+                block_outcomes.append(0)
         else:
             num_zeros += 1
             num_correct[stim_id] = 0
+            block_outcomes.append(0)
             dopamine_level = dop.negative_dopamine()
 
         simulate(130)  # dopamin delay
@@ -1098,6 +1155,31 @@ for block in range(num_blocks):
         dop_input_time = get_time()
 
         simulate(inter_trial)
+
+        # --- GPe firing-rate trace: drain the monitor and bin it into a
+        # per-action population rate (Hz), then discard the raw spikes. ---
+        spk = GPeSpikes.get("spike")  # {neuron_rank: [spike step indices since last get()]}
+        now = get_time()
+        bin_edges = np.arange(last_drain_time, now + gpe_fr_bin_ms, gpe_fr_bin_ms)
+        if len(bin_edges) < 2:
+            bin_edges = np.array([last_drain_time, now + gpe_fr_bin_ms])
+        spike_times_ms = []
+        spike_actions = []
+        for neuron_rank, steps in spk.items():
+            if len(steps) == 0:
+                continue
+            spike_times_ms.append(np.array(steps) * dt)
+            spike_actions.append(np.full(len(steps), neuron_rank // population_size))
+        spike_times_ms = np.concatenate(spike_times_ms) if spike_times_ms else np.array([])
+        spike_actions = np.concatenate(spike_actions) if spike_actions else np.array([])
+        counts, _, _ = np.histogram2d(
+            spike_times_ms, spike_actions,
+            bins=[bin_edges, np.arange(num_actions + 1) - 0.5],
+        )
+        rate_hz = counts / (population_size * gpe_fr_bin_ms / 1000.0)  # (n_bins, num_actions)
+        gpe_rate_values.append(rate_hz)
+        gpe_rate_times.append(bin_edges[:-1])
+        last_drain_time = now
 
         # This is what it saves on every trial
         # You should set it according to what you need
@@ -1141,7 +1223,8 @@ for block in range(num_blocks):
         num_trials += 1
         trial += 1
 
-    if num_trials == 30 or num_zeros == 3:
+    max_trials = legacy_max_trials if block_definition == "legacy" else nhp_max_trials
+    if num_trials == max_trials or num_zeros == 3:
         failed_blocks[block] = 1
 
 
@@ -1153,6 +1236,12 @@ np.save("mw_c_sd2_sim" + str(sim_id) + ".npy", mw_c_sd2)
 np.save("mw_c_stn_sim" + str(sim_id) + ".npy", mw_c_stn)
 np.save("mw_c_thal_sim" + str(sim_id) + ".npy", mw_c_thal)
 np.save("mw_stn_gpe_sim" + str(sim_id) + ".npy", mw_stn_gpe)
+
+# GPe firing-rate trace (rows=time bins, cols=action sub-population, in Hz)
+# and the times bins/choices are anchored to (ms, same clock as get_time()).
+np.save("gpe_rate_values_sim" + str(sim_id) + ".npy", np.vstack(gpe_rate_values))
+np.save("gpe_rate_times_sim" + str(sim_id) + ".npy", np.concatenate(gpe_rate_times))
+np.save("choice_times_sim" + str(sim_id) + ".npy", np.array(choice_times))
 
 output = np.array(output)
 np.savetxt(

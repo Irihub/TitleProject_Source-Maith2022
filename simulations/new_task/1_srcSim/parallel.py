@@ -1048,7 +1048,8 @@ for block in range(num_blocks):
     prev_correct = correct
     while prev_correct == correct:
         correct = np.random.randint(low=0, high=3)
-    print("new_correct = ", correct + 1, "\n")
+    print("BLOCK: ", block)
+    print(" new_correct = ", correct + 1, "\n")
     probabilities_reward = np.zeros(3)
     probabilities_reward[correct] = 1.0
 

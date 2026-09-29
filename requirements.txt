@@ -10,3 +10,6 @@ pingouin==0.5.1
 scikit-learn==0.22.2.post1
 scipy==1.7.1
 tqdm==4.36.1
+# Needed by analyses/thesis_power_analysis/ (bootstrap_power.py, extract_model_pilot.py)
+statsmodels==0.13.5
+openpyxl==3.1.2
