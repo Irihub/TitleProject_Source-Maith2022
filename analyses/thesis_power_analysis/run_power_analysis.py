@@ -37,8 +37,8 @@ D_BY_PHASE = {"naive": 0.20, "pcp": 0.20, "dbs": 0.30}
 ALPHA = 0.05 / 3
 
 TARGET_POWER = 0.80
-N_SIMS = 5000       # subir a 5000-10000 para el resultado final del informe
-SEED = 12345
+N_SIMS = 10000       # subir a 5000-10000 para el resultado final del informe
+SEED = 54321
 
 
 # ---------------------------------------------------------------------------

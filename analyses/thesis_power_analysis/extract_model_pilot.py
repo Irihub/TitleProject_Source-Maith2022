@@ -27,15 +27,12 @@ fallidos (failed_blocks_simN.npy). Este script hace la conversion:
     2. Descarta enteramente los bloques marcados como fallidos en
        failed_blocks_simN.npy (equivalente a los bloques incompletos que
        load_trial_matrix descarta para los datos NHP).
-    3. Para cada bloque restante, toma los ULTIMOS `n_trials` ensayos
-       (todo bloque no-fallido tiene garantizados al menos 15 ensayos,
-       porque el criterio de exito de parallel.py exige 15 aciertos
-       CONSECUTIVOS antes de terminar el bloque), para igualar la
-       convencion usada al extraer los datos NHP (alli tambien se usan
-       los ultimos ensayos del bloque). Esto NO reconcilia la definicion
-       de "bloque" en si entre modelo y NHP (ver caveat en
-       blocks_from_simulation); solo iguala que ensayo se toma como
-       primero/ultimo dentro de cada bloque.
+    3. Para cada bloque restante, toma los PRIMEROS `n_trials` ensayos,
+       para igualar la convencion usada al extraer los datos NHP (los 15
+       ensayos reportados alli son los PRIMEROS de cada bloque, no los
+       ultimos). Esto NO reconcilia la definicion de "bloque" en si entre
+       modelo y NHP (ver caveat en blocks_from_simulation); solo iguala
+       que ensayo se toma como primero dentro de cada bloque.
     4. Calcula, para cada ensayo, dos metricas binarias:
          - exito:  1 si decision == correct, 0 si no.
          - cambio: 1 si la decision de este ensayo es distinta de la
@@ -135,10 +132,23 @@ def load_trials(folder: Path, sim_id: int) -> pd.DataFrame:
 
 def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np.ndarray, np.ndarray]:
     """
-    Devuelve (success_rows, switch_rows) para una simulacion: dos arreglos
-    de forma (n_bloques_no_fallidos, n_trials), con NaN donde un bloque
-    (que no deberia pasar, salvo casos raros) tuviera menos de n_trials
-    ensayos.
+    Devuelve (success_rows, switch_rows) para una simulacion: dos arreglos,
+    de forma (n_bloques_utilizables, n_trials) cada uno (no necesariamente
+    con el mismo numero de filas entre si, ver abajo).
+
+    Bajo block_definition="legacy" todo bloque no-fallido tiene garantizados
+    >=15 ensayos (el criterio de exito exige 15 aciertos CONSECUTIVOS). Bajo
+    "nhp_like", en cambio, un bloque puede terminar con TAN POCO como
+    nhp_threshold_min ensayos (si el umbral de ese bloque se alcanza antes
+    de llegar a n_trials) -- esto ya NO es un caso raro, es esperable. Esos
+    bloques cortos se rellenan con NaN al inicio de la fila y luego se
+    descartan por completo (independientemente entre exito y cambio, ya
+    que un bloque puede quedar incompleto en una metrica y no en la otra:
+    el relleno afecta ambas por igual, pero el NaN del primer ensayo de
+    cada simulacion en 'cambio' solo afecta esa metrica). Por eso
+    success_rows y switch_rows pueden terminar con distinto numero de
+    filas -- igual que ya asume blocks_for_phase() al juntarlas por
+    separado.
     """
     trials = load_trials(folder, sim_id)
 
@@ -158,28 +168,26 @@ def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np
         if failed_blocks is not None and block_id < len(failed_blocks) and failed_blocks[block_id] == 1:
             continue  # bloque incompleto/fallido: se descarta por completo
 
-        # Se toman los ULTIMOS n_trials ensayos del bloque (no los primeros),
-        # para igualar la convencion usada al extraer los datos NHP.
+        # Se toman los PRIMEROS n_trials ensayos del bloque, para igualar la
+        # convencion usada al extraer los datos NHP (los 15 ensayos
+        # reportados alli son los primeros de cada bloque, no los ultimos).
         # NOTA: esto no reconcilia la definicion de "bloque" en si -en el
         # modelo un bloque termina tras 15 aciertos consecutivos (max. 30
-        # ensayos), mientras que en los datos NHP termina con 12-15 aciertos
-        # dentro de los ultimos 25 ensayos, con el umbral elegido al azar por
-        # bloque-, solo iguala que ambos lados aporten los ensayos "finales"
-        # del bloque en vez de los "iniciales". Pendiente: unificar la
-        # definicion de bloque en el codigo de simulacion y re-extraer.
-        idx = block_trials.index[-n_trials:]
+        # ensayos) o, bajo "nhp_like", tras 12-15 aciertos dentro de los
+        # ultimos 25 ensayos (umbral elegido al azar por bloque)-, solo
+        # asegura que ambos lados tomen los ensayos "iniciales" del bloque.
+        idx = block_trials.index[:n_trials]
         row_success = success_all.loc[idx].to_numpy()
         row_switch = switch_all.loc[idx].to_numpy()
 
         if len(idx) < n_trials:
-            # No deberia pasar para un bloque no-fallido (todo bloque exitoso
-            # tiene >=15 ensayos, ya que el criterio de exito exige 15
-            # aciertos consecutivos), pero se protege igual: se rellena con
-            # NaN al INICIO (para conservar el ultimo ensayo real en la
-            # ultima columna) y load_trial_matrix descartara la fila.
+            # Bloque mas corto que n_trials (esperable bajo "nhp_like", ver
+            # docstring de arriba): se rellena con NaN al FINAL (para
+            # conservar el primer ensayo real en la primera columna); la
+            # fila se descarta mas abajo.
             pad = n_trials - len(idx)
-            row_success = np.concatenate([np.full(pad, np.nan), row_success])
-            row_switch = np.concatenate([np.full(pad, np.nan), row_switch])
+            row_success = np.concatenate([row_success, np.full(pad, np.nan)])
+            row_switch = np.concatenate([row_switch, np.full(pad, np.nan)])
 
         success_rows.append(row_success)
         switch_rows.append(row_switch)
@@ -187,7 +195,20 @@ def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np
     if not success_rows:
         return (np.empty((0, n_trials)), np.empty((0, n_trials)))
 
-    return np.vstack(success_rows), np.vstack(switch_rows)
+    success_matrix = np.vstack(success_rows)
+    switch_matrix = np.vstack(switch_rows)
+
+    # Descarta filas con NaN, independientemente por metrica (igual que
+    # bootstrap_power.load_trial_matrix hace para el lado NHP). Antes esto
+    # solo ocurria "gratis" cuando estos datos pasaban por un archivo Excel
+    # y se releian con load_trial_matrix (p.ej. en build_model_pilot); un
+    # consumidor que use esta funcion directamente (p.ej. hpo_search.py)
+    # necesita este filtro aqui mismo, o una sola fila con NaN contamina
+    # silenciosamente cualquier .mean() posterior sobre toda la matriz.
+    success_matrix = success_matrix[~np.isnan(success_matrix).any(axis=1)]
+    switch_matrix = switch_matrix[~np.isnan(switch_matrix).any(axis=1)]
+
+    return success_matrix, switch_matrix
 
 
 def blocks_for_phase(sources: list[tuple[Path, list[int] | None]], n_trials: int) -> tuple[np.ndarray, np.ndarray]:
@@ -201,8 +222,11 @@ def blocks_for_phase(sources: list[tuple[Path, list[int] | None]], n_trials: int
             continue
         for sim_id in ids:
             success_rows, switch_rows = blocks_from_simulation(folder, sim_id, n_trials)
+            # Checked independently: success_rows/switch_rows can now have
+            # different lengths (see blocks_from_simulation's docstring).
             if len(success_rows):
                 all_success.append(success_rows)
+            if len(switch_rows):
                 all_switch.append(switch_rows)
 
     if not all_success:

@@ -1,9 +1,10 @@
 *__pycache__/
-*.png
-*.svg
 
 # Generated simulation/analysis data (large, reproducible from source scripts)
+stashed_runs
 simulations/*/*_dataRaw/
 simulations/*/*_dataEv/
+simulations/*/*_srcSim/__pycache__/
+simulations/*/*_srcSim/annarchy_sim*/
 analyses/*/*_dataEv/
 # analyses/*/*_results/

@@ -25,6 +25,10 @@ cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master
 cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
 (for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
 
+[Route to new task simulation]
+cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master/simulations/new_task/1_srcSim
+(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master/simulations/new_task/1_srcSim
+
 [Run ONE simulation (for debugging)]
 python parallel.py 1
 

@@ -3,11 +3,14 @@ startTime=$(date +%s)
 let parallel=30
 let durchgaenge=1
 
+# Block count per simulation, passed through to parallel.py's --num-blocks.
+num_blocks=60
+
 for durchgang in $(seq $durchgaenge); do
 	startdurchgangTime=$(date +%s)
         for i in $(seq $parallel); do
                 let y=$i+$parallel*$((durchgang - 1))
-                python parallel.py $y &
+                python parallel.py $y --num-blocks $num_blocks &
         done
         wait
         sleep 5

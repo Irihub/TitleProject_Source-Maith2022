@@ -176,7 +176,7 @@ def bootstrap_tost_power(x1, x2_pool, n1, n2, margin, alpha, n_sims=3000,
 
 def find_min_n2_bootstrap(x1, x2_pool, n1, margin, alpha, target_power=0.80,
                            n_sims=3000, assume_null_true=False,
-                           lo=30, hi=20000, tol=15, seed=None):
+                           lo=30, hi=50000, tol=15, seed=None):
     """
     Busqueda por biseccion del n2 minimo (numero de bloques simulados) que
     alcanza la potencia objetivo, usando bootstrap_tost_power como funcion

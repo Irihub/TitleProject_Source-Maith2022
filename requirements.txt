@@ -13,3 +13,7 @@ tqdm==4.36.1
 # Needed by analyses/thesis_power_analysis/ (bootstrap_power.py, extract_model_pilot.py)
 statsmodels==0.13.5
 openpyxl==3.1.2
+# Needed by simulations/new_task/1_srcSim/hpo_search.py. Pinned to a version
+# that still supports Python 3.7.4 (Optuna dropped 3.7 support in later
+# releases) -- if this version refuses to install, try an older 2.x release.
+optuna==2.10.1
