@@ -48,8 +48,8 @@ FILES = {
     "naive": {
         "nhp_success": ("behaviorSuccessNaive.xlsx", "Sheet1"),
         "nhp_switch":  ("behaviorSwitchNaive.xlsx", "Sheet1"),
-        "model_success": ("model_pilot.xlsx", "demo_success"),
-        "model_switch":  ("model_pilot.xlsx", "demo_switch"),
+        "model_success": ("model_pilot.xlsx", "naive_success"),
+        "model_switch":  ("model_pilot.xlsx", "naive_switch"),
     },
     "pcp": {
         "nhp_success": ("behaviorSuccessPcp.xlsx", "Sheet1"),

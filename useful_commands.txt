@@ -19,15 +19,15 @@ conda deactivate
 
 [Route to project]
 cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master
-(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master
+(for cluster) cd ~/TitleProject_Source-Maith2022
 
 [Route to 014a simulation]
 cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
-(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master/simulations/014a_new_dopamine_cluster/1_srcSim
+(for cluster) cd ~/TitleProject_Source-Maith2022/simulations/014a_new_dopamine_cluster/1_srcSim
 
 [Route to new task simulation]
 cd /mnt/c/Users/User/Desktop/Maith2022_ExplorationSTNGPe-master/simulations/new_task/1_srcSim
-(for cluster) cd ~/neuralSimulation/Maith2022_ExplorationSTNGPe-master/simulations/new_task/1_srcSim
+(for cluster) cd ~/TitleProject_Source-Maith2022/simulations/new_task/1_srcSim
 
 [Run ONE simulation (for debugging)]
 python parallel.py 1
@@ -45,6 +45,18 @@ pkill -f parallel.py
 
 [Check live RAM usage]
 watch -n 5 'free -h; echo; ps -C python -o pid,rss,etime,args --sort=-rss | awk "NR==1{print;next}{printf \"%s %7.0f MB %s %s %s\n\",\$1,\$2/1024,\$3,\$5,\$6}"'
+
+[Optuna commands]
+{run}
+export PYTHONUNBUFFERED=1
+nohup python hpo_search.py > hpo_log.txt 2>&1 &
+disown
+
+{Follow log}
+tail -f hpo_log.txt
+
+{kill process}
+pkill -f hpo_search.py
 
 [Cluster terminal commands]
 {Check number of threads}

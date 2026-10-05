@@ -95,11 +95,12 @@ BASELINE = {
 # +-50% around each baseline value, as specified in the proposal.
 RANGES = {name: (0.5 * value, 1.5 * value) for name, value in BASELINE.items()}
 
-OPTUNA_TRIALS = 1
-SIMS_PER_TRIAL = 5
+OPTUNA_TRIALS = 50
+N_PARALLEL_OPTUNA_TRIALS = 10
+SIMS_PER_TRIAL = 3
 BLOCKS_PER_SIM = 30
-N_TRIALS_PER_BLOCK = 15  # matches extract_model_pilot.py's default; keep in sync
 
+N_TRIALS_PER_BLOCK = 15  # matches extract_model_pilot.py's default; keep in sync
 CALIBRATION_FRACTION = 0.70
 CALIBRATION_SEED = 20240101
 
@@ -288,7 +289,7 @@ def main() -> None:
         direction="minimize",
         load_if_exists=True,
     )
-    study.optimize(objective, n_trials=OPTUNA_TRIALS)
+    study.optimize(objective, n_trials=OPTUNA_TRIALS, n_jobs=N_PARALLEL_OPTUNA_TRIALS)
 
     print("\nBest parameters found:")
     for name, value in study.best_params.items():

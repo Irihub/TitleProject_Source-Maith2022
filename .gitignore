@@ -1,4 +1,8 @@
 *__pycache__/
+*.npy
+output_sim*
+run_log.txt
+fertig_zeit.txt
 
 # Generated simulation/analysis data (large, reproducible from source scripts)
 stashed_runs

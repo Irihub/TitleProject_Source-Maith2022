@@ -13,9 +13,10 @@ Por que hace falta este paso
 -------------------------------------------------------------------------
 bootstrap_power.load_trial_matrix() espera, por hoja de Excel, una matriz
 de bloques x ensayos (ancho fijo, `n_trials` columnas) en la que cada fila
-es un bloque y cada columna un ensayo dentro del bloque, con NaN si el
-bloque no completo esa cantidad de ensayos (y esas filas se descartan por
-completo). Los datos crudos de las simulaciones, en cambio, vienen en
+es un bloque y cada columna un ensayo dentro del bloque, con NaN al final
+de la fila si el bloque no completo esa cantidad de ensayos (bootstrap_power
+calcula las metricas de esas filas usando solo sus ensayos reales, no las
+descarta). Los datos crudos de las simulaciones, en cambio, vienen en
 formato "una fila = un ensayo" (output_simN) mas un archivo de bloques
 fallidos (failed_blocks_simN.npy). Este script hace la conversion:
 
@@ -39,8 +40,9 @@ fallidos (failed_blocks_simN.npy). Este script hace la conversion:
            decision del ensayo INMEDIATAMENTE anterior en la misma
            simulacion (cruzando el limite entre bloques, igual que en una
            sesion real continua). El primer ensayo de cada simulacion no
-           tiene ensayo anterior y queda como NaN (esa fila se descartara
-           downstream, igual que un bloque incompleto).
+           tiene ensayo anterior y queda como NaN ahi (bootstrap_power
+           ignora esa unica celda al promediar esa fila, ver
+           per_block_switch_probability).
     5. Junta los bloques de todas las simulaciones/carpetas asignadas a
        una misma "fase" en una unica matriz, y la guarda en una hoja
        "{fase}_success"/"{fase}_switch" de model_pilot.xlsx, exactamente
@@ -98,10 +100,8 @@ OUTPUT_COLUMNS = [
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PHASES: dict[str, list[tuple[Path, list[int] | None]]] = {
-    "demo": [
-        (REPO_ROOT / "simulations" / "014a_new_dopamine_cluster" / "1_srcSim", None),
-    ],
-    # "naive": [(REPO_ROOT / "simulations" / "<carpeta_naive>" / "1_srcSim", None)],
+    #"demo": [(REPO_ROOT / "simulations" / "014a_new_dopamine_cluster" / "1_srcSim", None)],
+    "naive": [(REPO_ROOT / "simulations" / "new_task" / "1_srcSim", None)],
     # "pcp":   [(REPO_ROOT / "simulations" / "<carpeta_pcp>" / "1_srcSim", None)],
     # "dbs":   [(REPO_ROOT / "simulations" / "<carpeta_dbs>" / "1_srcSim", None)],
 }
@@ -140,15 +140,17 @@ def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np
     >=15 ensayos (el criterio de exito exige 15 aciertos CONSECUTIVOS). Bajo
     "nhp_like", en cambio, un bloque puede terminar con TAN POCO como
     nhp_threshold_min ensayos (si el umbral de ese bloque se alcanza antes
-    de llegar a n_trials) -- esto ya NO es un caso raro, es esperable. Esos
-    bloques cortos se rellenan con NaN al inicio de la fila y luego se
-    descartan por completo (independientemente entre exito y cambio, ya
-    que un bloque puede quedar incompleto en una metrica y no en la otra:
-    el relleno afecta ambas por igual, pero el NaN del primer ensayo de
-    cada simulacion en 'cambio' solo afecta esa metrica). Por eso
-    success_rows y switch_rows pueden terminar con distinto numero de
-    filas -- igual que ya asume blocks_for_phase() al juntarlas por
-    separado.
+    de llegar a n_trials). Esto refleja exactamente la misma regla de la
+    tarea real (los datos NHP tambien tienen bloques mas cortos que 15
+    ensayos), asi que esas filas NO se descartan: se rellenan con NaN al
+    final y bootstrap_power calcula sus metricas usando solo los ensayos
+    reales disponibles (ver per_block_success_rate, etc.). Solo se
+    descarta una fila si queda COMPLETAMENTE vacia (ver mas abajo), lo
+    cual puede diferir entre exito y cambio (el NaN del primer ensayo de
+    cada simulacion en 'cambio' es independiente del relleno por bloque
+    corto) -- por eso success_rows y switch_rows pueden terminar con
+    distinto numero de filas, igual que ya asume blocks_for_phase() al
+    juntarlas por separado.
     """
     trials = load_trials(folder, sim_id)
 
@@ -182,9 +184,11 @@ def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np
 
         if len(idx) < n_trials:
             # Bloque mas corto que n_trials (esperable bajo "nhp_like", ver
-            # docstring de arriba): se rellena con NaN al FINAL (para
-            # conservar el primer ensayo real en la primera columna); la
-            # fila se descarta mas abajo.
+            # docstring de arriba, y refleja la misma regla de la tarea
+            # real): se rellena con NaN al FINAL, para conservar el primer
+            # ensayo real en la primera columna. La fila SE CONSERVA;
+            # bootstrap_power calcula sus metricas sobre los ensayos
+            # reales unicamente.
             pad = n_trials - len(idx)
             row_success = np.concatenate([row_success, np.full(pad, np.nan)])
             row_switch = np.concatenate([row_switch, np.full(pad, np.nan)])
@@ -198,15 +202,14 @@ def blocks_from_simulation(folder: Path, sim_id: int, n_trials: int) -> tuple[np
     success_matrix = np.vstack(success_rows)
     switch_matrix = np.vstack(switch_rows)
 
-    # Descarta filas con NaN, independientemente por metrica (igual que
-    # bootstrap_power.load_trial_matrix hace para el lado NHP). Antes esto
-    # solo ocurria "gratis" cuando estos datos pasaban por un archivo Excel
-    # y se releian con load_trial_matrix (p.ej. en build_model_pilot); un
-    # consumidor que use esta funcion directamente (p.ej. hpo_search.py)
-    # necesita este filtro aqui mismo, o una sola fila con NaN contamina
-    # silenciosamente cualquier .mean() posterior sobre toda la matriz.
-    success_matrix = success_matrix[~np.isnan(success_matrix).any(axis=1)]
-    switch_matrix = switch_matrix[~np.isnan(switch_matrix).any(axis=1)]
+    # Descarta unicamente filas COMPLETAMENTE vacias (todas NaN), igual que
+    # bootstrap_power.load_trial_matrix hace para el lado NHP -- un bloque
+    # corto (algunas celdas NaN al final) SE CONSERVA. Esto se revisa aqui
+    # ademas de en load_trial_matrix porque un consumidor que use esta
+    # funcion directamente (p.ej. hpo_search.py) nunca pasa por un archivo
+    # Excel ni por load_trial_matrix.
+    success_matrix = success_matrix[~np.isnan(success_matrix).all(axis=1)]
+    switch_matrix = switch_matrix[~np.isnan(switch_matrix).all(axis=1)]
 
     return success_matrix, switch_matrix
 

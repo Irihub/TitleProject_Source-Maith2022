@@ -6,8 +6,17 @@ parametrico.
 Estructura esperada de los datos crudos (por fase y por tipo de dato):
     - Cada fila es un bloque.
     - Cada columna es un ensayo (trial) dentro del bloque (hasta 15).
-    - Un bloque incompleto tiene celdas vacias (NaN al leerlo con pandas) y
-      debe ser descartado en su totalidad antes de calcular cualquier metrica.
+    - Un bloque puede terminar antes de llegar a 15 ensayos (tanto en los
+      datos NHP como en el modelo, bajo la regla "nhp_like": el bloque
+      termina apenas se alcanza el umbral de exito, que puede ocurrir
+      antes de 15 ensayos). Esas filas tienen celdas vacias (NaN) al
+      FINAL y SE CONSERVAN: las metricas por bloque se calculan solo
+      sobre los ensayos reales disponibles en esa fila (ver
+      per_block_success_rate, per_block_switch_probability,
+      per_block_learning_rate). Solo se descarta una fila si esta
+      COMPLETAMENTE vacia (todas sus celdas NaN), lo cual no deberia
+      ocurrir dado el largo minimo de bloque de la tarea, pero se revisa
+      igual de forma defensiva.
     - Para la hoja de "exito": 1 = ensayo exitoso, 0 = fallo.
     - Para la hoja de "cambio": 1 = hubo cambio de accion, 0 = no hubo cambio.
 
@@ -26,8 +35,11 @@ from statsmodels.stats.weightstats import ttost_ind
 def load_trial_matrix(source, sheet_name=None):
     """
     Carga una matriz de bloques x ensayos desde un Excel/CSV o un DataFrame ya
-    en memoria, y descarta por completo cualquier bloque (fila) incompleto,
-    es decir, cualquier fila que contenga al menos un valor faltante (NaN).
+    en memoria. Un bloque mas corto que el ancho de la hoja (NaN al final de
+    su fila, porque termino antes de llegar a esa cantidad de ensayos) SE
+    CONSERVA -- las funciones per_block_* de mas abajo saben calcular sus
+    metricas usando solo los ensayos reales de cada fila. Solo se descarta
+    una fila si esta COMPLETAMENTE vacia (todas sus celdas NaN).
 
     Parameters
     ----------
@@ -40,7 +52,9 @@ def load_trial_matrix(source, sheet_name=None):
     Returns
     -------
     numpy.ndarray
-        Matriz de forma (n_bloques_completos, n_ensayos), dtype float.
+        Matriz de forma (n_bloques_utilizables, n_ensayos), dtype float.
+        Puede contener NaN al final de una fila para bloques mas cortos
+        que n_ensayos; los consumidores (per_block_*) las manejan.
     """
     if isinstance(source, pd.DataFrame):
         df = source.copy()
@@ -50,12 +64,12 @@ def load_trial_matrix(source, sheet_name=None):
         df = pd.read_csv(source, header=None)
 
     n_before = len(df)
-    df_clean = df.dropna(how="any").reset_index(drop=True)
+    df_clean = df.dropna(how="all").reset_index(drop=True)
     n_after = len(df_clean)
     n_discarded = n_before - n_after
     if n_discarded > 0:
-        print(f"  [aviso] Se descartaron {n_discarded} bloque(s) incompleto(s) "
-              f"de un total de {n_before}.")
+        print(f"  [aviso] Se descartaron {n_discarded} bloque(s) completamente "
+              f"vacio(s) de un total de {n_before}.")
 
     return df_clean.to_numpy(dtype=float)
 
@@ -65,38 +79,54 @@ def load_trial_matrix(source, sheet_name=None):
 # ---------------------------------------------------------------------------
 
 def per_block_success_rate(matrix):
-    """Tasa de exito por bloque: promedio de aciertos (0/1) en el bloque."""
-    return matrix.mean(axis=1)
+    """Tasa de exito por bloque: promedio de aciertos (0/1) en el bloque.
+
+    Usa nanmean para que un bloque mas corto que el ancho de la matriz
+    (NaN al final de su fila, ver load_trial_matrix) se promedie solo
+    sobre sus ensayos reales, en vez de ser descartado."""
+    return np.nanmean(matrix, axis=1)
 
 
 def per_block_switch_probability(matrix):
-    """Probabilidad de cambio por bloque: promedio de cambios (0/1) en el bloque."""
-    return matrix.mean(axis=1)
+    """Probabilidad de cambio por bloque: promedio de cambios (0/1) en el
+    bloque. Ver nota de nanmean en per_block_success_rate."""
+    return np.nanmean(matrix, axis=1)
 
 
 def per_block_learning_rate(matrix):
     """
-    Tasa de aprendizaje por bloque, operacionalizada como la pendiente de una
-    regresion lineal simple de la tasa de exito (0/1) en funcion de la
-    posicion del ensayo dentro del bloque (0, 1, ..., n_trials-1).
+    Tasa de aprendizaje por bloque, operacionalizada como la diferencia de
+    dos puntos: (ultimo ensayo real - primer ensayo real) dividido por
+    (n_validos - 1), de la tasa de exito (0/1) a lo largo del bloque.
 
-    NOTA METODOLOGICA: esta es una de varias operacionalizaciones posibles de
-    "derivada de la tasa de exito". Si se prefiere una version mas simple
-    (diferencia de dos puntos), reemplazar el cuerpo de esta funcion por:
-        return (matrix[:, -1] - matrix[:, 0]) / (matrix.shape[1] - 1)
-    Ambas dan resultados cualitativamente similares; se eligio la pendiente
-    de regresion por ser mas robusta a ruido en ensayos individuales.
+    NOTA METODOLOGICA: esta es una de varias operacionalizaciones posibles
+    de "derivada de la tasa de exito". Una alternativa es la pendiente de
+    una regresion lineal simple (mas robusta a ruido en ensayos
+    individuales, a costa de ser menos directa de interpretar); si se
+    prefiere esa version, reemplazar el cuerpo de esta funcion por una
+    regresion OLS fila por fila sobre los ensayos validos de cada bloque.
+
+    Un bloque mas corto que el ancho de la matriz (NaN al final de su fila)
+    se evalua usando solo sus ensayos reales -- no se asume que todas las
+    filas tengan la misma cantidad de ensayos validos, por lo que esto ya
+    NO puede vectorizarse directamente y se calcula fila por fila. Si una
+    fila tiene menos de 2 ensayos reales (no deberia ocurrir dado el largo
+    minimo de bloque de la tarea, ~12 ensayos), se devuelve 0.0 (sin
+    tendencia) en lugar de NaN, para no propagar NaN silenciosamente a los
+    promedios/agregados posteriores.
     """
-    n_trials = matrix.shape[1]
-    t = np.arange(n_trials)
-    t_centered = t - t.mean()
-    denom = np.sum(t_centered ** 2)
-    # Pendiente OLS vectorizada para todas las filas a la vez:
-    # slope = sum((t - t_mean) * (y - y_mean)) / sum((t - t_mean)^2)
-    y = matrix
-    y_mean = y.mean(axis=1, keepdims=True)
-    slopes = (t_centered * (y - y_mean)).sum(axis=1) / denom
-    return slopes
+    n_rows = matrix.shape[0]
+    rates = np.empty(n_rows)
+    for i in range(n_rows):
+        row = matrix[i]
+        valid = ~np.isnan(row)
+        n_valid = int(valid.sum())
+        if n_valid < 2:
+            rates[i] = 0.0
+            continue
+        y = row[valid]
+        rates[i] = (y[-1] - y[0]) / (n_valid - 1)
+    return rates
 
 
 METRIC_FUNCS = {
