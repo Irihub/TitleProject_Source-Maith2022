@@ -33,16 +33,22 @@ np.random.seed()
 parser = argparse.ArgumentParser()
 parser.add_argument("sim_id", type=int)
 parser.add_argument("--num-blocks", type=int, default=60)
-parser.add_argument("--gpe-poisson-rate", type=float, default=100.0,
+#original: default=60
+parser.add_argument("--gpe-poisson-rate", type=float, default=51.99451928941033,
                      help="Poisson firing rate driving GPe noise input [Hz]")
-parser.add_argument("--gpe-poisson-weight", type=float, default=0.015,
+#original: default=100.0
+parser.add_argument("--gpe-poisson-weight", type=float, default=0.007896913134349053,
                      help="GPeE->GPe synaptic weight [nS]")
-parser.add_argument("--stn-gpe-prob-same", type=float, default=0.05,
+#original: default=0.015
+parser.add_argument("--stn-gpe-prob-same", type=float, default=0.06956973859236856,
                      help="STN->GPe connection probability, same action")
-parser.add_argument("--stn-gpe-prob-diff", type=float, default=0.3,
+#original: default=0.05
+parser.add_argument("--stn-gpe-prob-diff", type=float, default=0.20526207509604705,
                      help="STN->GPe connection probability, different action")
-parser.add_argument("--stn-gpe-init-weight", type=float, default=0.00063,
+#original: default=0.3
+parser.add_argument("--stn-gpe-init-weight", type=float, default=0.0005159191588009256,
                      help="STN->GPe initial synaptic weight [nS]")
+#original: default=0.00063
 args = parser.parse_args()
 
 sim_id = args.sim_id

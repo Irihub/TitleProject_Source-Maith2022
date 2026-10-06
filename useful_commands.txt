@@ -58,6 +58,9 @@ tail -f hpo_log.txt
 {kill process}
 pkill -f hpo_search.py
 
+{open dashboard}
+optuna-dashboard sqlite:///hpo_study.db
+
 [Cluster terminal commands]
 {Check number of threads}
 nproc
@@ -67,3 +70,6 @@ htop
 
 {Active terminals}
 who
+
+{Copy folder from server}
+scp -r firibarra@mullo.diinf.usach.cl:TitleProject_Source-Maith2022/simulations/new_task C:/Users/User/Desktop
