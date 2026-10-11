@@ -10,5 +10,8 @@ simulations/*/*_dataRaw/
 simulations/*/*_dataEv/
 simulations/*/*_srcSim/__pycache__/
 simulations/*/*_srcSim/annarchy_sim*/
+simulations/*/*_srcSim/hpo_study.db*
+simulations/*/*_srcSim/hpo_trials*.csv
+simulations/*/*_srcSim/hpo_log*.txt
 analyses/*/*_dataEv/
 # analyses/*/*_results/

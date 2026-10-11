@@ -45,9 +45,17 @@ SEED = 54321
 # Rutas de archivos (AJUSTAR a la estructura real de los datos)
 # ---------------------------------------------------------------------------
 FILES = {
+    # naive: apunta a la particion de CALIBRACION por ahora, mientras se
+    # sigue ajustando el modelo via Optuna (hpo_search.py usa la misma
+    # particion para su funcion objetivo). Generados por npz_to_xlsx.py a
+    # partir de behaviorSuccessNaive.xlsx/behaviorSwitchNaive.xlsx, con la
+    # MISMA semilla/fraccion que hpo_search.py. Una vez conforme con el
+    # ajuste, cambiar a behaviorSuccess/SwitchNaiveValidation.xlsx (la
+    # particion de VALIDACION, nunca vista por Optuna) para el analisis de
+    # potencia y el TOST final -- ver conversacion sobre evitar sesgo.
     "naive": {
-        "nhp_success": ("behaviorSuccessNaive.xlsx", "Sheet1"),
-        "nhp_switch":  ("behaviorSwitchNaive.xlsx", "Sheet1"),
+        "nhp_success": ("behaviorSuccessNaiveCalibration.xlsx", "Sheet1"),
+        "nhp_switch":  ("behaviorSwitchNaiveCalibration.xlsx", "Sheet1"),
         "model_success": ("model_pilot.xlsx", "naive_success"),
         "model_switch":  ("model_pilot.xlsx", "naive_switch"),
     },

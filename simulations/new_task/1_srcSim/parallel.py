@@ -33,22 +33,25 @@ np.random.seed()
 parser = argparse.ArgumentParser()
 parser.add_argument("sim_id", type=int)
 parser.add_argument("--num-blocks", type=int, default=60)
-#original: default=60
-parser.add_argument("--gpe-poisson-rate", type=float, default=51.99451928941033,
+parser.add_argument("--gpe-poisson-rate", type=float, default=100.0,
                      help="Poisson firing rate driving GPe noise input [Hz]")
-#original: default=100.0
-parser.add_argument("--gpe-poisson-weight", type=float, default=0.007896913134349053,
+#optuna: 51.99451928941033
+parser.add_argument("--gpe-poisson-weight", type=float, default=0.015,
                      help="GPeE->GPe synaptic weight [nS]")
-#original: default=0.015
-parser.add_argument("--stn-gpe-prob-same", type=float, default=0.06956973859236856,
+#optuna: 0.007896913134349053
+parser.add_argument("--stn-gpe-prob-same", type=float, default=0.05,
                      help="STN->GPe connection probability, same action")
-#original: default=0.05
-parser.add_argument("--stn-gpe-prob-diff", type=float, default=0.20526207509604705,
+#optuna: 0.06956973859236856
+parser.add_argument("--stn-gpe-prob-diff", type=float, default=0.3,
                      help="STN->GPe connection probability, different action")
-#original: default=0.3
-parser.add_argument("--stn-gpe-init-weight", type=float, default=0.0005159191588009256,
+#optuna: 0.20526207509604705
+parser.add_argument("--stn-gpe-init-weight", type=float, default=0.00063,
                      help="STN->GPe initial synaptic weight [nS]")
-#original: default=0.00063
+#optuna: 0.0005159191588009256
+parser.add_argument("--csd2-factor", type=float, default=-0.9,
+                     help="Cortex->SD2 (indirect pathway) dopamine-modulated learning-rate multiplier")
+parser.add_argument("--csd2-delta", type=float, default=0.000005,
+                     help="Cortex->SD2 per-presynaptic-spike weight decay")
 args = parser.parse_args()
 
 sim_id = args.sim_id
@@ -67,7 +70,7 @@ dop_decay = True
 
 # GPe firing-rate recording (for choice-aligned PSTH analysis, see
 # analyses/thesis_power_analysis or a dedicated plotting script)
-gpe_fr_bin_ms = 20.0  # bin width for the GPe population firing-rate trace
+gpe_fr_bin_ms = 1.0  # bin width for the GPe population firing-rate trace
 
 
 stn_gpe_synapse = "plastic"  # fixed,plastic
@@ -840,7 +843,7 @@ CSD1.Apre_max = 1.5
 CSD1.tau_dop = 150
 CSD1.max_E = 2.5
 
-CSD2.factor = -0.9  # -11
+CSD2.factor = args.csd2_factor  # -0.9 original (comment above: "-11" was an even earlier value)
 CSD2.dApre = 0.2  # 0.1
 CSD2.dApost = -0.006
 CSD2.tau_E = 1600  # 150
@@ -849,7 +852,7 @@ CSD2.gm = 1  # 2
 CSD2.max_weight = 0.0011
 CSD2.tau_dop = 75 * 4
 CSD2.max_E = 8
-CSD2.delta = 0.000005
+CSD2.delta = args.csd2_delta  # 0.000005 original
 
 CSTN.factor = 700  # 3
 CSTN.dApost = -0.02

@@ -101,7 +101,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PHASES: dict[str, list[tuple[Path, list[int] | None]]] = {
     #"demo": [(REPO_ROOT / "simulations" / "014a_new_dopamine_cluster" / "1_srcSim", None)],
-    "naive": [(REPO_ROOT / "simulations" / "new_task" / "1_srcSim", None)],
+    #"naive": [(REPO_ROOT / "simulations" / "new_task" / "1_srcSim", None)],
+    "naive": [(REPO_ROOT / "stashed_runs" / "new_task" / "full run optuna parameters - 30 sims 60 blocks - 07-10-2026", None)], # Naive Optuna
     # "pcp":   [(REPO_ROOT / "simulations" / "<carpeta_pcp>" / "1_srcSim", None)],
     # "dbs":   [(REPO_ROOT / "simulations" / "<carpeta_dbs>" / "1_srcSim", None)],
 }

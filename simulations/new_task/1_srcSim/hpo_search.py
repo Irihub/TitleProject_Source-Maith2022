@@ -1,17 +1,32 @@
 """
 Optuna hyperparameter search for the new_task model, as described in the
-title project proposal ("Metodologia a usar", section 5.1):
+title project proposal ("Metodologia a usar", section 5.1).
 
-Tunable parameters (search range: +-50% around the value used in this
-codebase / reported in Maith et al. 2023):
+This script now tunes WHATEVER parameters are listed in BASELINE below --
+which parameters that is has changed over time as the search moved on
+(see the comments around BASELINE/STUDY_NAME). To switch back to a
+previous search: uncomment its BASELINE/STUDY_NAME block, comment out the
+current one, and re-run -- nothing about a previous search is deleted,
+and each search lives under its own `study_name` inside the SAME
+hpo_study.db (Optuna supports multiple independent studies per storage
+file), so resuming an old one never overwrites another.
+
+CURRENT search -- Cortex->SD2 (indirect pathway) plasticity parameters
+(search range: +-50% around the value hardcoded in parallel.py):
+    - CSD2.factor [dimensionless] (dopamine-modulated learning-rate
+      multiplier for the Cortex->SD2 synapse; negative by design -- see
+      the discussion of IzhikevichSynapse_D2 in parallel.py) (baseline: -0.9)
+    - CSD2.delta [nS] (per-presynaptic-spike weight decay) (baseline: 0.000005)
+
+PREVIOUS search -- GPe/STN-GPe parameters (kept commented below):
     - GPe Poisson noise rate [Hz]                    (baseline: 100.0)
     - GPeE -> GPe Poisson noise weight [nS]          (baseline: 0.015)
     - STN -> GPe connection probability, same action (baseline: 0.05)
     - STN -> GPe connection probability, diff action (baseline: 0.3)
     - STN -> GPe initial synaptic weight [nS]        (baseline: 0.00063)
 
-Search: 30 Optuna trials (TPE sampler), each evaluating 5 simulations of
-30 blocks (4500 blocks total), matching the proposal's stated budget.
+Search: see OPTUNA_TRIALS/N_PARALLEL_OPTUNA_TRIALS/SIMS_PER_TRIAL/
+BLOCKS_PER_SIM below for the current budget.
 
 Objective (minimized): the mean of three standardized squared errors, one
 each for "success rate" (bootstrap_power.per_block_success_rate),
@@ -84,16 +99,51 @@ from bootstrap_power import (  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Search configuration
+#
+# BASELINE is the single source of truth for which parameters this search
+# tunes: each key here must exactly match a parallel.py CLI flag name once
+# "_" is replaced by "-" and prefixed with "--" (e.g. "csd2_factor" ->
+# "--csd2-factor"), since run_simulations() below builds parallel.py's
+# command line generically from this dict (see _flag_name()). To tune a
+# different/additional set of parameters: add/remove entries here (and
+# make sure parallel.py has a matching --flag with a sensible default),
+# change STUDY_NAME so you don't resume the wrong search by accident, and
+# re-run -- nothing else in this file needs to change.
 # ---------------------------------------------------------------------------
+
+# --- Previous search (GPe/STN-GPe parameters) -- kept for reference, not
+# deleted. To resume it: uncomment this BASELINE/STUDY_NAME, comment out
+# the ones below, and re-run (it continues under its own study_name,
+# independent of whatever search is active below).
+# BASELINE = {
+#     "gpe_poisson_rate": 100.0,
+#     "gpe_poisson_weight": 0.015,
+#     "stn_gpe_prob_same": 0.05,
+#     "stn_gpe_prob_diff": 0.3,
+#     "stn_gpe_init_weight": 0.00063,
+# }
+# STUDY_NAME = "new_task_hpo"
+
+# --- Current search (Cortex->SD2 plasticity parameters) --------------------
 BASELINE = {
-    "gpe_poisson_rate": 100.0,
-    "gpe_poisson_weight": 0.015,
-    "stn_gpe_prob_same": 0.05,
-    "stn_gpe_prob_diff": 0.3,
-    "stn_gpe_init_weight": 0.00063,
+    "csd2_factor": -0.9,
+    "csd2_delta": 0.000005,
 }
-# +-50% around each baseline value, as specified in the proposal.
-RANGES = {name: (0.5 * value, 1.5 * value) for name, value in BASELINE.items()}
+STUDY_NAME = "new_task_hpo_csd2"
+
+# +-50% around each baseline value's MAGNITUDE, as specified in the
+# proposal -- i.e. (value - 0.5*|value|, value + 0.5*|value|), not
+# (0.5*value, 1.5*value). The two formulas agree for positive baselines
+# (e.g. 100.0 -> (50, 150) either way) but the naive 0.5x/1.5x version
+# silently produces a BACKWARDS (low > high) range for a negative baseline
+# like csd2_factor=-0.9 (0.5*-0.9=-0.45 > 1.5*-0.9=-1.35), which Optuna's
+# suggest_float would reject. This version stays correctly ordered and
+# keeps both bounds on the same side of zero as the baseline (a 50%
+# offset is smaller in magnitude than the baseline itself) -- important
+# for csd2_factor, which must stay negative to preserve the D1/D2 sign
+# distinction.
+RANGES = {name: (value - 0.5 * abs(value), value + 0.5 * abs(value)) for name, value in BASELINE.items()}
+RANGES["csd2_factor"] = (-5.0, -0.7)
 
 OPTUNA_TRIALS = 50
 N_PARALLEL_OPTUNA_TRIALS = 10
@@ -185,20 +235,22 @@ def load_naive_calibration_stats(force_resplit: bool = False) -> dict:
     return stats
 
 
+def _flag_name(param_name: str) -> str:
+    """Maps a BASELINE key to its parallel.py CLI flag, e.g.
+    "csd2_factor" -> "--csd2-factor". This is the naming convention every
+    BASELINE entry (and its matching parallel.py argparse flag) must
+    follow for run_simulations() to stay fully generic."""
+    return "--" + param_name.replace("_", "-")
+
+
 def run_simulations(sim_ids: list[int], params: dict, num_blocks: int) -> None:
     """Launches len(sim_ids) parallel.py subprocesses concurrently and waits
     for all of them to finish. Raises RuntimeError if any of them fail."""
     procs = []
     for sim_id in sim_ids:
-        cmd = [
-            sys.executable, "parallel.py", str(sim_id),
-            "--num-blocks", str(num_blocks),
-            "--gpe-poisson-rate", str(params["gpe_poisson_rate"]),
-            "--gpe-poisson-weight", str(params["gpe_poisson_weight"]),
-            "--stn-gpe-prob-same", str(params["stn_gpe_prob_same"]),
-            "--stn-gpe-prob-diff", str(params["stn_gpe_prob_diff"]),
-            "--stn-gpe-init-weight", str(params["stn_gpe_init_weight"]),
-        ]
+        cmd = [sys.executable, "parallel.py", str(sim_id), "--num-blocks", str(num_blocks)]
+        for name, value in params.items():
+            cmd.extend([_flag_name(name), str(value)])
         log_path = SRC_DIR / f"hpo_log_sim{sim_id}.txt"
         log_file = open(log_path, "w")
         proc = subprocess.Popen(cmd, cwd=SRC_DIR, stdout=log_file, stderr=subprocess.STDOUT)
@@ -283,7 +335,7 @@ def main() -> None:
     load_naive_calibration_stats()  # compute/cache the split once, up front
 
     study = optuna.create_study(
-        study_name="new_task_hpo",
+        study_name=STUDY_NAME,
         storage=f"sqlite:///{SRC_DIR / 'hpo_study.db'}",
         sampler=TPESampler(seed=CALIBRATION_SEED, multivariate=True),
         direction="minimize",
@@ -296,11 +348,17 @@ def main() -> None:
         print(f"  {name}: {value:.6g}  (baseline: {BASELINE[name]:.6g})")
     print(f"Best objective (standardized squared error): {study.best_value:.4f}")
 
+    # Named per STUDY_NAME so switching searches never overwrites a
+    # previous search's exported trial history (the study_name itself is
+    # always safe either way, since hpo_study.db keeps every study it has
+    # ever seen under its own name -- this is just about the derived CSV).
+    trials_csv_path = SRC_DIR / f"hpo_trials_{STUDY_NAME}.csv"
     df = study.trials_dataframe()
-    df.to_csv(SRC_DIR / "hpo_trials.csv", index=False)
-    print(f"\nFull trial history saved to {SRC_DIR / 'hpo_trials.csv'}")
-    print(f"Optuna study saved to {SRC_DIR / 'hpo_study.db'} "
-          f"(resumable: re-running this script continues the same study).")
+    df.to_csv(trials_csv_path, index=False)
+    print(f"\nFull trial history saved to {trials_csv_path}")
+    print(f"Optuna study '{STUDY_NAME}' saved to {SRC_DIR / 'hpo_study.db'} "
+          f"(resumable: re-running this script continues the same study; "
+          f"other studies in the same file, e.g. a previous search, are untouched).")
 
 
 if __name__ == "__main__":
