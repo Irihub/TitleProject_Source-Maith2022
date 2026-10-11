@@ -146,7 +146,7 @@ RANGES = {name: (value - 0.5 * abs(value), value + 0.5 * abs(value)) for name, v
 RANGES["csd2_factor"] = (-5.0, -0.7)
 
 OPTUNA_TRIALS = 50
-N_PARALLEL_OPTUNA_TRIALS = 10
+N_PARALLEL_OPTUNA_TRIALS = 15
 SIMS_PER_TRIAL = 3
 BLOCKS_PER_SIM = 30
 
