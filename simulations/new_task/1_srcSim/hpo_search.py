@@ -17,6 +17,9 @@ CURRENT search -- Cortex->SD2 (indirect pathway) plasticity parameters
       multiplier for the Cortex->SD2 synapse; negative by design -- see
       the discussion of IzhikevichSynapse_D2 in parallel.py) (baseline: -0.9)
     - CSD2.delta [nS] (per-presynaptic-spike weight decay) (baseline: 0.000005)
+    - CSD2.max_weight [nS] (hard ceiling of the Cortex->SD2 weights; with a
+      large csd2_factor all channels saturate against it, which freezes
+      this pathway) (baseline: 0.0011)
 
 PREVIOUS search -- GPe/STN-GPe parameters (kept commented below):
     - GPe Poisson noise rate [Hz]                    (baseline: 100.0)
@@ -136,12 +139,16 @@ from bootstrap_power import (  # noqa: E402
 BASELINE = {
     "csd2_factor": -0.9,
     "csd2_delta": 0.000005,
+    "csd2_max_weight": 0.0011,
 }
-# Was "new_task_hpo_csd2" under the previous (block-mean, 3-metric) objective.
-# The objective changed to curve_loss(), so a new study name is required:
-# with load_if_exists=True, reusing the old name would mix trials scored by
-# two different losses in one study.
-STUDY_NAME = "new_task_hpo_csd2_curveloss"
+# History of this search's name:
+#   "new_task_hpo_csd2"                    -- previous (block-mean, 3-metric) objective
+#   "new_task_hpo_csd2_curveloss"          -- curve_loss(), tuning csd2_factor + csd2_delta
+#   "new_task_hpo_csd2_maxw_curveloss"     -- curve_loss(), now also tuning csd2_max_weight
+# Each change of objective or of the tuned parameter set needs a new name:
+# with load_if_exists=True, reusing a name would mix trials scored by a
+# different loss / over a different search space in one study.
+STUDY_NAME = "new_task_hpo_csd2_maxw_curveloss"
 
 # +-50% around each baseline value's MAGNITUDE, as specified in the
 # proposal -- i.e. (value - 0.5*|value|, value + 0.5*|value|), not
@@ -157,6 +164,19 @@ STUDY_NAME = "new_task_hpo_csd2_curveloss"
 RANGES = {name: (value - 0.5 * abs(value), value + 0.5 * abs(value)) for name, value in BASELINE.items()}
 RANGES["csd2_factor"] = (-6.0, -0.7)
 RANGES["csd2_delta"] = (0.000002, 0.000008)
+RANGES["csd2_max_weight"] = (0.00055, 0.00165)  # +-50% around 0.0011, as the generic rule above gives
+
+# Discretization of the search space: a parameter listed here is sampled on the
+# grid low, low+step, low+2*step, ... up to high (Optuna's suggest_float(step=)),
+# which makes the space finite and lets TPE learn from repeated/nearby values.
+# A parameter with no entry is sampled continuously. Each range must be a whole
+# number of steps (checked by _check_steps() at start-up): otherwise Optuna
+# silently moves `high` down to the last grid point.
+STEPS = {
+    "csd2_factor": 0.1,
+    "csd2_delta": 0.0000002,
+    "csd2_max_weight": 0.00005,
+}
 
 OPTUNA_TRIALS = 20
 N_PARALLEL_OPTUNA_TRIALS = 5
@@ -405,8 +425,25 @@ def curve_loss(success_matrix: np.ndarray, switch_matrix: np.ndarray, calib: dic
     }
 
 
+def _check_steps() -> None:
+    """Fails early (instead of Optuna silently shrinking `high`) if STEPS names
+    an unknown parameter or a range is not a whole number of steps."""
+    for name, step in STEPS.items():
+        if name not in BASELINE:
+            raise ValueError(f"STEPS has an entry for '{name}', which is not in BASELINE.")
+        if step <= 0:
+            raise ValueError(f"STEPS['{name}'] must be positive (got {step}).")
+        low, high = RANGES[name]
+        n_steps = (high - low) / step
+        if abs(n_steps - round(n_steps)) > 1e-6:
+            raise ValueError(
+                f"RANGES['{name}']=({low}, {high}) is {n_steps:.4f} steps of {step}, not a whole number; "
+                f"adjust the range or STEPS['{name}'] so that (high - low) / step is an integer."
+            )
+
+
 def objective(trial: optuna.Trial) -> float:
-    params = {name: trial.suggest_float(name, *RANGES[name]) for name in BASELINE}
+    params = {name: trial.suggest_float(name, *RANGES[name], step=STEPS.get(name)) for name in BASELINE}
     sim_ids = [trial.number * SIMS_PER_TRIAL + i + 1 for i in range(SIMS_PER_TRIAL)]
 
     try:
@@ -450,6 +487,7 @@ def objective(trial: optuna.Trial) -> float:
 
 
 def main() -> None:
+    _check_steps()
     load_naive_calibration_stats()  # compute/cache the split once, up front
 
     study = optuna.create_study(
