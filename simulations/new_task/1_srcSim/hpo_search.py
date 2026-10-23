@@ -28,18 +28,25 @@ PREVIOUS search -- GPe/STN-GPe parameters (kept commented below):
 Search: see OPTUNA_TRIALS/N_PARALLEL_OPTUNA_TRIALS/SIMS_PER_TRIAL/
 BLOCKS_PER_SIM below for the current budget.
 
-Objective (minimized): the mean of three standardized squared errors, one
-each for "success rate" (bootstrap_power.per_block_success_rate),
-"learning rate" (per-block success-probability slope,
-bootstrap_power.per_block_learning_rate), and "switch probability"
-(bootstrap_power.per_block_switch_probability), between the model's
-pooled blocks for this trial's parameters and the NHP CALIBRATION subset
-(70% of the naive-phase blocks, split off once and cached; the remaining
-30% is set aside untouched for the final TOST validation, see
-load_naive_calibration_stats() below). Success rate and learning rate are
-both derived from the same underlying success matrix, so they share the
-same calibration/validation row split; switch uses its own independent
-split of the switch matrix (see load_naive_calibration_stats()).
+Objective (minimized): the mean of two per-trial curve errors, see
+curve_loss() below. For each of "success" and "switch", the model's pooled
+blocks for this trial's parameters give one mean value per trial position
+within the block (trial 1..N_TRIALS_PER_BLOCK, averaged over blocks), which
+is compared with the same curve of the NHP CALIBRATION subset (70% of the
+naive-phase blocks, split off once and cached; the remaining 30% is set
+aside untouched for the final TOST validation, see
+load_naive_calibration_stats() below). The error of each curve is the mean
+over trial positions of the plain squared difference, in probability units
+(both metrics live in [0, 1], so no standardization is needed). Learning
+rate is not in the objective: it is derived from the success matrix
+(bootstrap_power.per_block_learning_rate), so matching the success curve
+covers it. Success and switch use independent row splits of their
+matrices (see load_naive_calibration_stats()).
+
+The previous objective (the mean of three standardized squared errors on
+the block-level MEANS of success rate, learning rate and switch
+probability) is gone; studies run with it are not comparable to this one
+and live under other STUDY_NAMEs.
 
 This script only ORCHESTRATES simulations: for each trial it launches
 parallel.py as a subprocess per simulation (as everywhere else in this
@@ -72,6 +79,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -129,7 +137,11 @@ BASELINE = {
     "csd2_factor": -0.9,
     "csd2_delta": 0.000005,
 }
-STUDY_NAME = "new_task_hpo_csd2"
+# Was "new_task_hpo_csd2" under the previous (block-mean, 3-metric) objective.
+# The objective changed to curve_loss(), so a new study name is required:
+# with load_if_exists=True, reusing the old name would mix trials scored by
+# two different losses in one study.
+STUDY_NAME = "new_task_hpo_csd2_curveloss"
 
 # +-50% around each baseline value's MAGNITUDE, as specified in the
 # proposal -- i.e. (value - 0.5*|value|, value + 0.5*|value|), not
@@ -143,16 +155,26 @@ STUDY_NAME = "new_task_hpo_csd2"
 # for csd2_factor, which must stay negative to preserve the D1/D2 sign
 # distinction.
 RANGES = {name: (value - 0.5 * abs(value), value + 0.5 * abs(value)) for name, value in BASELINE.items()}
-RANGES["csd2_factor"] = (-5.0, -0.7)
+RANGES["csd2_factor"] = (-6.0, -0.7)
+RANGES["csd2_delta"] = (0.000002, 0.000008)
 
-OPTUNA_TRIALS = 50
-N_PARALLEL_OPTUNA_TRIALS = 15
-SIMS_PER_TRIAL = 3
-BLOCKS_PER_SIM = 30
+OPTUNA_TRIALS = 20
+N_PARALLEL_OPTUNA_TRIALS = 5
+SIMS_PER_TRIAL = 20
+BLOCKS_PER_SIM = 45
 
 N_TRIALS_PER_BLOCK = 15  # matches extract_model_pilot.py's default; keep in sync
 CALIBRATION_FRACTION = 0.70
 CALIBRATION_SEED = 20240101
+
+# Version of what naive_calibration_split.npz stores. Bump it whenever the
+# cached stats change meaning, so a stale cache is refreshed instead of being
+# silently reused (a stale learning-rate entry went unnoticed for a while).
+#   1 (no version key): block-level success/learning-rate/switch mean+SD, with
+#      learning rate still the OLS slope of the first version of the analysis.
+#   2: learning rate = two-point difference (bootstrap_power.per_block_learning_rate),
+#      plus the per-trial mean success/switch curves that curve_loss() uses.
+CALIBRATION_STATS_VERSION = 2
 
 
 def _safe_remove(path: Path) -> None:
@@ -170,18 +192,94 @@ def _split_indices(n: int, calib_frac: float, seed: int) -> tuple[np.ndarray, np
     return idx[:n_calib], idx[n_calib:]
 
 
+def _calibration_stats(success: np.ndarray, switch: np.ndarray,
+                       lr_calib_idx: np.ndarray, sw_calib_idx: np.ndarray) -> dict:
+    """Everything cached for the calibration subset: block-level mean/SD of
+    the three metrics (the TOST metrics; no longer in the objective, but used
+    by the thesis_sim_overview scripts) and the per-trial mean success/switch
+    curves (what curve_loss() compares against)."""
+    if success.shape[1] != N_TRIALS_PER_BLOCK or switch.shape[1] != N_TRIALS_PER_BLOCK:
+        raise ValueError(
+            f"NHP matrices have {success.shape[1]} (success) / {switch.shape[1]} (switch) trial columns, "
+            f"but N_TRIALS_PER_BLOCK={N_TRIALS_PER_BLOCK}; the model curves would not line up with them."
+        )
+    success_calib = success[lr_calib_idx]
+    switch_calib = switch[sw_calib_idx]
+    success_rate = per_block_success_rate(success_calib)
+    learning_rate = per_block_learning_rate(success_calib)
+    switch_prob = per_block_switch_probability(switch_calib)
+    return {
+        "success_mean": float(success_rate.mean()),
+        "success_sd": float(success_rate.std(ddof=1)),
+        "learning_rate_mean": float(learning_rate.mean()),
+        "learning_rate_sd": float(learning_rate.std(ddof=1)),
+        "switch_mean": float(switch_prob.mean()),
+        "switch_sd": float(switch_prob.std(ddof=1)),
+        "success_curve": np.nanmean(success_calib, axis=0),
+        "switch_curve": np.nanmean(switch_calib, axis=0),
+        "stats_version": CALIBRATION_STATS_VERSION,
+    }
+
+
+def _refresh_stale_calibration_cache(cache_path: Path, validation_path: Path, old_stats: dict) -> dict:
+    """Recomputes the cached calibration stats for the EXISTING split.
+
+    Used when naive_calibration_split.npz was written by an older version of
+    this file (see CALIBRATION_STATS_VERSION). The split itself is never
+    redrawn: the indices are re-derived from the fixed seed and checked
+    against both the reserved validation blocks and the old cached
+    success/switch stats, and the function refuses to continue if any of
+    them disagree. Only the cache file is rewritten; the validation file is
+    not touched."""
+    success = load_trial_matrix(ANALYSES_DIR / "behaviorSuccessNaive.xlsx", sheet_name="Sheet1")
+    switch = load_trial_matrix(ANALYSES_DIR / "behaviorSwitchNaive.xlsx", sheet_name="Sheet1")
+    lr_calib_idx, lr_valid_idx = _split_indices(len(success), CALIBRATION_FRACTION, CALIBRATION_SEED)
+    sw_calib_idx, sw_valid_idx = _split_indices(len(switch), CALIBRATION_FRACTION, CALIBRATION_SEED + 1)
+
+    if validation_path.exists():
+        saved = np.load(validation_path)
+        if not (np.array_equal(saved["success_validation"], success[lr_valid_idx])
+                and np.array_equal(saved["switch_validation"], switch[sw_valid_idx])):
+            raise RuntimeError(
+                f"The split re-derived from CALIBRATION_SEED/CALIBRATION_FRACTION does not match the reserved "
+                f"validation blocks in {validation_path}; refusing to refresh {cache_path}, because that would "
+                f"change which blocks count as calibration."
+            )
+
+    stats = _calibration_stats(success, switch, lr_calib_idx, sw_calib_idx)
+    for key in ("success_mean", "success_sd", "switch_mean", "switch_sd"):
+        if key in old_stats and not np.isclose(old_stats[key], stats[key], rtol=1e-9, atol=0.0):
+            raise RuntimeError(
+                f"Recomputed {key}={stats[key]!r} differs from the cached {old_stats[key]!r}; the stale cache "
+                f"does not come from the current NHP files/split, refusing to overwrite it."
+            )
+
+    print(f"[calibration] refreshing stale cache {cache_path.name} (version "
+          f"{old_stats.get('stats_version', 1)} -> {CALIBRATION_STATS_VERSION}); split unchanged.")
+    for key in ("learning_rate_mean", "learning_rate_sd"):
+        if key in old_stats:
+            print(f"[calibration]   {key}: {old_stats[key]:.4f} -> {stats[key]:.4f}")
+    np.savez(cache_path, **stats)
+    return stats
+
+
 def load_naive_calibration_stats(force_resplit: bool = False) -> dict:
     """
     Loads the naive-phase NHP data (the same behaviorSuccessNaive.xlsx /
     behaviorSwitchNaive.xlsx files run_power_analysis.py's FILES["naive"]
     points at), splits its blocks into a calibration subset (used here)
     and a validation subset (reserved for the final TOST), and returns the
-    calibration subset's success-rate/learning-rate/switch mean and SD.
+    calibration subset's statistics: the block-level mean/SD of success
+    rate, learning rate and switch probability, plus the per-trial mean
+    success and switch curves ("success_curve"/"switch_curve", arrays of
+    N_TRIALS_PER_BLOCK values) that the objective compares against.
 
     The split is cached to naive_calibration_split.npz on first run and
     reused afterwards, so re-running/resuming this search never silently
     recomputes a different split -- which would break the
-    calibration/validation independence the title project relies on.
+    calibration/validation independence the title project relies on. A
+    cache written by an older version of this file (see
+    CALIBRATION_STATS_VERSION) is refreshed in place on the SAME split.
 
     Success rate and learning rate are both derived from the same success
     matrix, so they share one split (lr_calib_idx/lr_valid_idx). Switch
@@ -196,25 +294,18 @@ def load_naive_calibration_stats(force_resplit: bool = False) -> dict:
 
     if cache_path.exists() and not force_resplit:
         cached = np.load(cache_path)
-        return {k: cached[k].item() for k in cached.files}
+        stats = {k: (cached[k].item() if cached[k].ndim == 0 else cached[k]) for k in cached.files}
+        if stats.get("stats_version") == CALIBRATION_STATS_VERSION:
+            return stats
+        return _refresh_stale_calibration_cache(cache_path, validation_path, stats)
 
     success = load_trial_matrix(ANALYSES_DIR / "behaviorSuccessNaive.xlsx", sheet_name="Sheet1")
     switch = load_trial_matrix(ANALYSES_DIR / "behaviorSwitchNaive.xlsx", sheet_name="Sheet1")
-    success_all = per_block_success_rate(success)
-    learning_rate_all = per_block_learning_rate(success)
-    switch_all = per_block_switch_probability(switch)
 
-    lr_calib_idx, lr_valid_idx = _split_indices(len(learning_rate_all), CALIBRATION_FRACTION, CALIBRATION_SEED)
-    sw_calib_idx, sw_valid_idx = _split_indices(len(switch_all), CALIBRATION_FRACTION, CALIBRATION_SEED + 1)
+    lr_calib_idx, lr_valid_idx = _split_indices(len(success), CALIBRATION_FRACTION, CALIBRATION_SEED)
+    sw_calib_idx, sw_valid_idx = _split_indices(len(switch), CALIBRATION_FRACTION, CALIBRATION_SEED + 1)
 
-    stats = {
-        "success_mean": float(success_all[lr_calib_idx].mean()),
-        "success_sd": float(success_all[lr_calib_idx].std(ddof=1)),
-        "learning_rate_mean": float(learning_rate_all[lr_calib_idx].mean()),
-        "learning_rate_sd": float(learning_rate_all[lr_calib_idx].std(ddof=1)),
-        "switch_mean": float(switch_all[sw_calib_idx].mean()),
-        "switch_sd": float(switch_all[sw_calib_idx].std(ddof=1)),
-    }
+    stats = _calibration_stats(success, switch, lr_calib_idx, sw_calib_idx)
     np.savez(cache_path, **stats)
 
     # Reserve the validation subset untouched, for the final TOST later.
@@ -284,6 +375,36 @@ def cleanup_simulation_files(sim_id: int) -> None:
     shutil.rmtree(SRC_DIR / f"annarchy_sim{sim_id}", ignore_errors=True)
 
 
+def curve_loss(success_matrix: np.ndarray, switch_matrix: np.ndarray, calib: dict) -> dict:
+    """The objective: the mean of two per-trial curve errors.
+
+    success_matrix/switch_matrix are blocks x N_TRIALS_PER_BLOCK 0/1 matrices
+    (NaN-padded for short blocks) in the format blocks_from_simulation()
+    returns. For each one, the model's mean over blocks at every trial
+    position is compared with the NHP calibration curve (calib["success_curve"]
+    / calib["switch_curve"]); the error is the mean over trial positions of
+    the plain squared difference, in probability units. Every trial position
+    weighs the same, and trial positions with no model data at all are
+    skipped. The loss is the mean of the success and the switch error.
+
+    Returns {"loss", "loss_success", "loss_switch", "success_curve",
+    "switch_curve"}; the curves are the model's per-trial means.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # an all-NaN column gives NaN, skipped below
+        success_curve = np.nanmean(success_matrix, axis=0)
+        switch_curve = np.nanmean(switch_matrix, axis=0)
+        loss_success = float(np.nanmean((success_curve - calib["success_curve"]) ** 2))
+        loss_switch = float(np.nanmean((switch_curve - calib["switch_curve"]) ** 2))
+    return {
+        "loss": (loss_success + loss_switch) / 2,
+        "loss_success": loss_success,
+        "loss_switch": loss_switch,
+        "success_curve": success_curve,
+        "switch_curve": switch_curve,
+    }
+
+
 def objective(trial: optuna.Trial) -> float:
     params = {name: trial.suggest_float(name, *RANGES[name]) for name in BASELINE}
     sim_ids = [trial.number * SIMS_PER_TRIAL + i + 1 for i in range(SIMS_PER_TRIAL)]
@@ -314,21 +435,18 @@ def objective(trial: optuna.Trial) -> float:
     success_matrix = np.vstack(all_success)
     switch_matrix = np.vstack(all_switch)
 
-    success_mean = float(per_block_success_rate(success_matrix).mean())
-    learning_rate_mean = float(per_block_learning_rate(success_matrix).mean())
-    switch_mean = float(per_block_switch_probability(switch_matrix).mean())
-
     calib = load_naive_calibration_stats()
-    loss_success = ((success_mean - calib["success_mean"]) / calib["success_sd"]) ** 2
-    loss_learning_rate = ((learning_rate_mean - calib["learning_rate_mean"]) / calib["learning_rate_sd"]) ** 2
-    loss_switch = ((switch_mean - calib["switch_mean"]) / calib["switch_sd"]) ** 2
-    loss = (loss_success + loss_learning_rate + loss_switch) / 3
+    result = curve_loss(success_matrix, switch_matrix, calib)
 
-    trial.set_user_attr("success_mean", success_mean)
-    trial.set_user_attr("learning_rate_mean", learning_rate_mean)
-    trial.set_user_attr("switch_mean", switch_mean)
+    # Not part of the loss, but the quantities the final TOST compares, so
+    # a trial's attributes show how it stands on them.
+    trial.set_user_attr("loss_success_curve", result["loss_success"])
+    trial.set_user_attr("loss_switch_curve", result["loss_switch"])
+    trial.set_user_attr("success_mean", float(per_block_success_rate(success_matrix).mean()))
+    trial.set_user_attr("learning_rate_mean", float(per_block_learning_rate(success_matrix).mean()))
+    trial.set_user_attr("switch_mean", float(per_block_switch_probability(switch_matrix).mean()))
     trial.set_user_attr("n_blocks", int(len(success_matrix)))
-    return loss
+    return result["loss"]
 
 
 def main() -> None:
@@ -346,7 +464,7 @@ def main() -> None:
     print("\nBest parameters found:")
     for name, value in study.best_params.items():
         print(f"  {name}: {value:.6g}  (baseline: {BASELINE[name]:.6g})")
-    print(f"Best objective (standardized squared error): {study.best_value:.4f}")
+    print(f"Best objective (mean per-trial squared difference, probability units): {study.best_value:.5f}")
 
     # Named per STUDY_NAME so switching searches never overwrites a
     # previous search's exported trial history (the study_name itself is
