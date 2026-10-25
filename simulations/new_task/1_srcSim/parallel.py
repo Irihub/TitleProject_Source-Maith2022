@@ -52,6 +52,9 @@ parser.add_argument("--csd2-factor", type=float, default=-0.9,
                      help="Cortex->SD2 (indirect pathway) dopamine-modulated learning-rate multiplier")
 parser.add_argument("--csd2-delta", type=float, default=0.000005,
                      help="Cortex->SD2 per-presynaptic-spike weight decay")
+parser.add_argument("--csd2-max-weight", type=float, default=0.0011,
+                     help="Cortex->SD2 (indirect pathway) maximum synaptic weight [nS]; a hard ceiling "
+                          "the weights saturate against when csd2-factor is large")
 args = parser.parse_args()
 
 sim_id = args.sim_id
@@ -849,7 +852,7 @@ CSD2.dApost = -0.006
 CSD2.tau_E = 1600  # 150
 CSD2.tau_pre = 150 * 3
 CSD2.gm = 1  # 2
-CSD2.max_weight = 0.0011
+CSD2.max_weight = args.csd2_max_weight  # 0.0011 original
 CSD2.tau_dop = 75 * 4
 CSD2.max_E = 8
 CSD2.delta = args.csd2_delta  # 0.000005 original
