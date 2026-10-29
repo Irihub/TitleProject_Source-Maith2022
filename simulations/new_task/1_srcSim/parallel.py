@@ -55,7 +55,14 @@ parser.add_argument("--csd2-delta", type=float, default=0.000005,
 parser.add_argument("--csd2-max-weight", type=float, default=0.0011,
                      help="Cortex->SD2 (indirect pathway) maximum synaptic weight [nS]; a hard ceiling "
                           "the weights saturate against when csd2-factor is large")
+parser.add_argument("--sc-noise-scale", type=float, default=1.0,
+                     help="Strength of the Poisson noise driving the SC (the Thalamus population), as a "
+                          "multiple of the baseline (1.0 = unchanged). The noise rate is divided and the "
+                          "synaptic weight multiplied by this factor, so the AVERAGE drive (rate * weight) "
+                          "stays constant while the noise VARIANCE grows in proportion to it")
 args = parser.parse_args()
+if args.sc_noise_scale <= 0:
+    parser.error("--sc-noise-scale must be > 0 (1.0 = baseline)")
 
 sim_id = args.sim_id
 
@@ -415,7 +422,11 @@ GPeE.rates = args.gpe_poisson_rate
 GPiE.rates = 100  # 700
 STNE.rates = 100  # 500
 SDN.rates = 25
-ThalN.rates = 100
+# SC noise (ThalN -> Thalamus, the paper's SC): baseline 100 Hz at weight 0.005 nS
+# (see ThalNThal below). With --sc-noise-scale k, rate = 100/k and weight =
+# 0.005*k: the mean drive (rate*weight) is unchanged and the noise variance
+# (rate*weight^2) is k times larger. k = 1 reproduces the baseline exactly.
+ThalN.rates = 100 / args.sc_noise_scale
 
 
 # Integrators
@@ -769,7 +780,7 @@ SDNSD2 = Projection(
 
 ThalNThal = Projection(
     pre=ThalN, post=Thalamus, target="ampa", synapse=FixedSynapse
-).connect_one_to_one(weights=0.005)
+).connect_one_to_one(weights=0.005 * args.sc_noise_scale)  # see the ThalN.rates comment above
 
 
 # local competition
