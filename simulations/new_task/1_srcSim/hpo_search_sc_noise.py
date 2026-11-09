@@ -122,8 +122,8 @@ W_LR = 2.0
 # Budget -- independent of hpo_search.py's own settings.
 OPTUNA_TRIALS = 100            # max trials started per invocation; the scan has len(SC_NOISE_VALUES) in total,
                                # so anything >= 16 means "all that are still missing"
-N_PARALLEL_OPTUNA_TRIALS = 5   # trials running at the same time (each launches SIMS_PER_TRIAL simulations)
-SIMS_PER_TRIAL = 20            # simulations per trial (per noise scale)
+N_PARALLEL_OPTUNA_TRIALS = 3   # trials running at the same time (each launches SIMS_PER_TRIAL simulations)
+SIMS_PER_TRIAL = 25            # simulations per trial (per noise scale)
 BLOCKS_PER_SIM = 45            # blocks per simulation
 
 ORDER_SEED = 20241028          # fixed pseudo-random order in which the missing values are evaluated

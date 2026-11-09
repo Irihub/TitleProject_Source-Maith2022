@@ -55,14 +55,20 @@ parser.add_argument("--csd2-delta", type=float, default=0.000005,
 parser.add_argument("--csd2-max-weight", type=float, default=0.0011,
                      help="Cortex->SD2 (indirect pathway) maximum synaptic weight [nS]; a hard ceiling "
                           "the weights saturate against when csd2-factor is large")
+parser.add_argument("--sc-noise-rate", type=float, default=100.0,
+                     help="Firing rate of the Poisson noise driving the SC (the Thalamus population) [Hz]")
+parser.add_argument("--sc-noise-weight", type=float, default=0.005,
+                     help="Synaptic weight of that SC noise (ThalN->Thalamus) [nS]")
 parser.add_argument("--sc-noise-scale", type=float, default=1.0,
-                     help="Strength of the Poisson noise driving the SC (the Thalamus population), as a "
-                          "multiple of the baseline (1.0 = unchanged). The noise rate is divided and the "
-                          "synaptic weight multiplied by this factor, so the AVERAGE drive (rate * weight) "
-                          "stays constant while the noise VARIANCE grows in proportion to it")
+                     help="Optional multiplier applied ON TOP of --sc-noise-rate/--sc-noise-weight "
+                          "(1.0 = no effect): the rate is divided and the weight multiplied by this factor, "
+                          "so the AVERAGE noise drive (rate * weight) stays constant while the noise VARIANCE "
+                          "grows in proportion to it. Leave at 1.0 when tuning rate and weight separately")
 args = parser.parse_args()
-if args.sc_noise_scale <= 0:
-    parser.error("--sc-noise-scale must be > 0 (1.0 = baseline)")
+for _flag, _value in (("--sc-noise-rate", args.sc_noise_rate), ("--sc-noise-weight", args.sc_noise_weight),
+                      ("--sc-noise-scale", args.sc_noise_scale)):
+    if _value <= 0:
+        parser.error(f"{_flag} must be > 0")
 
 sim_id = args.sim_id
 
@@ -422,11 +428,13 @@ GPeE.rates = args.gpe_poisson_rate
 GPiE.rates = 100  # 700
 STNE.rates = 100  # 500
 SDN.rates = 25
-# SC noise (ThalN -> Thalamus, the paper's SC): baseline 100 Hz at weight 0.005 nS
-# (see ThalNThal below). With --sc-noise-scale k, rate = 100/k and weight =
-# 0.005*k: the mean drive (rate*weight) is unchanged and the noise variance
-# (rate*weight^2) is k times larger. k = 1 reproduces the baseline exactly.
-ThalN.rates = 100 / args.sc_noise_scale
+# SC noise (ThalN -> Thalamus, the paper's SC): --sc-noise-rate [Hz] at
+# --sc-noise-weight [nS] (see ThalNThal below), baseline 100 Hz at 0.005 nS.
+# The optional --sc-noise-scale k divides the rate and multiplies the weight by
+# k: the mean drive (rate*weight) is unchanged and the noise variance
+# (rate*weight^2) is k times larger. With the defaults (100, 0.005, 1.0) this
+# reproduces the baseline exactly.
+ThalN.rates = args.sc_noise_rate / args.sc_noise_scale
 
 
 # Integrators
@@ -780,7 +788,7 @@ SDNSD2 = Projection(
 
 ThalNThal = Projection(
     pre=ThalN, post=Thalamus, target="ampa", synapse=FixedSynapse
-).connect_one_to_one(weights=0.005 * args.sc_noise_scale)  # see the ThalN.rates comment above
+).connect_one_to_one(weights=args.sc_noise_weight * args.sc_noise_scale)  # see the ThalN.rates comment above
 
 
 # local competition
