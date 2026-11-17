@@ -22,7 +22,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1            # parallel.py is single-threaded (setup(num_threads=1))
-#SBATCH --mem=4G                     # ADJUST: measure with sacct, see below
+#SBATCH --mem=64G                    # ADJUST: measure with sacct, see below
 #SBATCH --time=1-00:00:00            # ADJUST: how long ONE simulation of NUM_BLOCKS blocks takes
 #SBATCH --output=full_run_%A_%a.log  # %A = array job id, %a = task id
 ##SBATCH --partition=PARTITION       # ADJUST if the cluster needs it (remove one leading '#')
